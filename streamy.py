@@ -18,6 +18,7 @@ _MATCH_EXTRA_DATA_ERROR = re.compile(r'Extra data: .*\(char (\d+).*\)').match
 def _get_end_pos(e):
     if getattr(e, 'msg') and not e.msg.startswith('Extra data'):
         return
+
     try:
         return e.pos
     except AttributeError:
@@ -69,12 +70,14 @@ def _stream_without_seek(fp, kwds):
             except ValueError as exc:
                 end_pos = _get_end_pos(exc)
                 if end_pos is None:
-                    if exc.msg.startswith('Expecting value') \
-                       and not buf.strip():
-                        buf = ''
-                        continue
-                    else:
+                    if (not exc.msg.startswith('Expecting value') or
+                            buf.strip()):
                         raise
+
+                    # buf is all whitespace
+                    buf = ''
+                    continue
+
                 obj = json.loads(buf[:exc.pos])
                 buf = buf[exc.pos:]
             else:
@@ -97,8 +100,6 @@ def stream(fp, json_lines=False, **kwds):
     if isinstance(fp, str):
         fp = io.StringIO(fp)
 
-    force_not_seekable = kwds.pop('_force_not_seekable', False)  # for testing
-
     if json_lines:
         for i in fp:
             i = i.strip()
@@ -106,7 +107,7 @@ def stream(fp, json_lines=False, **kwds):
                 yield json.loads(i, **kwds)
         return
 
-    if fp.seekable() and not force_not_seekable:
+    if fp.seekable():
         func = _stream_with_seek
     else:
         func = _stream_without_seek

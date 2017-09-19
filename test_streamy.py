@@ -1,4 +1,4 @@
-import json, streamy, unittest
+import json, streamy, unittest, io
 
 
 class StreamyTest(unittest.TestCase):
@@ -40,4 +40,6 @@ class StreamyTest(unittest.TestCase):
 
 class NotSeekableTest(StreamyTest):
     def _stream(self, s):
-        return streamy.stream(s, _force_not_seekable=True)
+        fp = io.StringIO(s)
+        fp.seekable = lambda: False
+        return streamy.stream(fp)
