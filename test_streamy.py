@@ -2,8 +2,11 @@ import json, streamy, unittest
 
 
 class StreamyTest(unittest.TestCase):
+    def _stream(self, s):
+        return streamy.stream(s)
+
     def assert_stream(self, s, *expected):
-        return self.assertEqual(list(streamy.stream(s)), list(expected))
+        return self.assertEqual(list(self._stream(s)), list(expected))
 
     def stream_fails(self, s):
         with self.assertRaises(ValueError):
@@ -33,3 +36,8 @@ class StreamyTest(unittest.TestCase):
         self.stream_fails('}')
         self.stream_fails('2,,')
         self.stream_fails('[2,]')
+
+
+class NotSeekableTest(StreamyTest):
+    def _stream(self, s):
+        return streamy.stream(s, _force_not_seekable=True)

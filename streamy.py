@@ -15,7 +15,9 @@ See https://stackoverflow.com/a/44190177/43839
 _MATCH_EXTRA_DATA_ERROR = re.compile(r'Extra data: .*\(char (\d+).*\)').match
 
 
-def get_end_pos(e):
+def _get_end_pos(e):
+    if getattr(e, 'msg') and not e.msg.startswith('Extra data'):
+        return
     try:
         return e.pos
     except AttributeError:
@@ -28,28 +30,7 @@ def get_end_pos(e):
         pass
 
 
-def stream(fp, json_lines=False, **kwds):
-    """
-    A function generating a stream of valid JSON objects.
-
-    Args:
-        fp: a file stream like you'd get from `open()` or `io.StringIO()`,
-            or a string.
-        json_lines: if true, each line holds at most one JSON expression.
-        kwds: keywords to pass to json.load or json.loads.
-    """
-    if isinstance(fp, str):
-        fp = io.StringIO(fp)
-
-    if json_lines:
-        for i in fp:
-            i = i.strip()
-            if i:
-                yield json.loads(i, **kwds)
-        return
-
-    assert fp.seekable(), "Streams must be json_lines or seekable"
-
+def _stream_with_seek(fp, kwds):
     start_pos = 0
     while True:
         # Skip whitespace
@@ -66,7 +47,7 @@ def stream(fp, json_lines=False, **kwds):
             yield json.load(fp, **kwds)
             return
         except ValueError as e:
-            end_pos = get_end_pos(e)
+            end_pos = _get_end_pos(e)
             if end_pos is None:
                 raise
 
@@ -75,3 +56,60 @@ def stream(fp, json_lines=False, **kwds):
             obj = json.loads(json_str, **kwds)
             start_pos += end_pos
             yield obj
+
+
+def _stream_without_seek(fp, kwds):
+    buf = ''
+    # XXX: alternatively could read a limited size buffer
+    for l in fp:
+        buf += l
+        while buf:
+            try:
+                obj = json.loads(buf, **kwds)
+            except ValueError as exc:
+                end_pos = _get_end_pos(exc)
+                if end_pos is None:
+                    if exc.msg.startswith('Expecting value') \
+                       and not buf.strip():
+                        buf = ''
+                        continue
+                    else:
+                        raise
+                obj = json.loads(buf[:exc.pos])
+                buf = buf[exc.pos:]
+            else:
+                buf = ''
+            yield obj
+    if buf:
+        raise ValueError('Extra data!')
+
+
+def stream(fp, json_lines=False, **kwds):
+    """
+    A function generating a stream of valid JSON objects.
+
+    Args:
+        fp: a file stream like you'd get from `open()` or `io.StringIO()`,
+            or a string.
+        json_lines: if true, each line holds at most one JSON expression.
+        kwds: keywords to pass to json.load or json.loads.
+    """
+    if isinstance(fp, str):
+        fp = io.StringIO(fp)
+
+    force_not_seekable = kwds.pop('_force_not_seekable', False)  # for testing
+
+    if json_lines:
+        for i in fp:
+            i = i.strip()
+            if i:
+                yield json.loads(i, **kwds)
+        return
+
+    if fp.seekable() and not force_not_seekable:
+        func = _stream_with_seek
+    else:
+        func = _stream_without_seek
+
+    for obj in func(fp, kwds):
+        yield obj
