@@ -15,7 +15,10 @@ See https://stackoverflow.com/a/44190177/43839
 _MATCH_EXTRA_DATA_ERROR = re.compile(r'Extra data: .*\(char (\d+).*\)').match
 
 
-def get_end_pos(e):
+def _get_end_pos(e):
+    if getattr(e, 'msg') and not e.msg.startswith('Extra data'):
+        return
+
     try:
         return e.pos
     except AttributeError:
@@ -26,6 +29,62 @@ def get_end_pos(e):
         return int(match.group(1))
     except:
         pass
+
+
+def _stream_with_seek(fp, kwds):
+    start_pos = 0
+    while True:
+        # Skip whitespace
+        while True:
+            ch = fp.read(1)
+            if not ch:
+                return
+            if not ch.isspace():
+                fp.seek(start_pos)
+                break
+            start_pos += 1
+
+        try:
+            yield json.load(fp, **kwds)
+            return
+        except ValueError as e:
+            end_pos = _get_end_pos(e)
+            if end_pos is None:
+                raise
+
+            fp.seek(start_pos)
+            json_str = fp.read(end_pos)
+            obj = json.loads(json_str, **kwds)
+            start_pos += end_pos
+            yield obj
+
+
+def _stream_without_seek(fp, kwds):
+    buf = ''
+    # XXX: alternatively could read a limited size buffer
+    for l in fp:
+        buf += l
+        while buf:
+            try:
+                obj = json.loads(buf, **kwds)
+            except ValueError as exc:
+                end_pos = _get_end_pos(exc)
+                if end_pos is None:
+                    if (not exc.msg.startswith('Expecting value') or
+                            buf.strip()):
+                        raise
+
+                    # buf is all whitespace
+                    buf = ''
+                    continue
+
+                obj = json.loads(buf[:exc.pos])
+                buf = buf[exc.pos:]
+            else:
+                buf = ''
+            yield obj
+    if buf:
+        raise ValueError('Extra data!')
 
 
 def stream(fp, json_lines=False, **kwds):
@@ -48,30 +107,10 @@ def stream(fp, json_lines=False, **kwds):
                 yield json.loads(i, **kwds)
         return
 
-    assert fp.seekable(), "Streams must be json_lines or seekable"
+    if fp.seekable():
+        func = _stream_with_seek
+    else:
+        func = _stream_without_seek
 
-    start_pos = 0
-    while True:
-        # Skip whitespace
-        while True:
-            ch = fp.read(1)
-            if not ch:
-                return
-            if not ch.isspace():
-                fp.seek(start_pos)
-                break
-            start_pos += 1
-
-        try:
-            yield json.load(fp, **kwds)
-            return
-        except ValueError as e:
-            end_pos = get_end_pos(e)
-            if end_pos is None:
-                raise
-
-            fp.seek(start_pos)
-            json_str = fp.read(end_pos)
-            obj = json.loads(json_str, **kwds)
-            start_pos += end_pos
-            yield obj
+    for obj in func(fp, kwds):
+        yield obj
